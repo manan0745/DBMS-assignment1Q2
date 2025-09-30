@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Normalization Assistant</title>
+  <style>
+    :root{--bg:#0f172a;--card:#0f172a;--glass:rgba(255,255,255,0.04);--accent:#06b6d4;--accent-2:#34d399}
+    *{box-sizing:border-box}
+    body{font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Arial; margin:0; background:linear-gradient(180deg,#071133 0%, #071a2a 100%); color:#e6eef6}
+    .wrap{max-width:1100px;margin:28px auto;padding:20px}
+    header{display:flex;align-items:center;gap:16px}
+    header h1{margin:0;font-size:22px}
+    .grid{display:grid;grid-template-columns:1fr 420px;gap:18px;margin-top:18px}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:16px;border-radius:12px;border:1px solid rgba(255,255,255,0.03);box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+    label{display:block;font-size:13px;color:#cfefff;margin-bottom:6px}
+    input[type=text], textarea{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:#e6eef6}
+    textarea{height:110px;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, 'Roboto Mono', monospace}
+    .row{display:flex;gap:8px}
+    button{background:var(--accent);border:none;color:#042331;padding:10px 12px;border-radius:8px;font-weight:700;cursor:pointer}
+    button.alt{background:transparent;border:1px solid rgba(255,255,255,0.06);color:#aee8f2}
+    .output{background:rgba(255,255,255,0.02);padding:12px;border-radius:8px;border:1px dashed rgba(255,255,255,0.03);margin-top:10px;color:#e6eef6}
+    .chip{display:inline-block;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,0.03);margin:4px 6px;font-weight:600;border:1px solid rgba(255,255,255,0.02)}
+    .step{background:linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:10px;border-radius:8px;margin-top:10px}
+    .good{color:#9ef7d0}
+    .warn{color:#ffd6a5}
+    .danger{color:#ffb4b4}
+    .small{font-size:13px;color:#a7dbe9}
+    footer{margin-top:18px;color:#9fbfca;font-size:13px}
+    @media(max-width:1000px){.grid{grid-template-columns:1fr}} 
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Normalization Assistant</h1>
+        <div class="small">Enter attributes and functional dependencies, compute closures, candidate keys and see 1NF→2NF→3NF→BCNF steps.</div>
+      </div>
+    </header>
+
+    <div class="grid">
+      <main class="card">
+        <h2 style="margin-top:0">Inputs</h2>
+        <label>Attributes (comma-separated)</label>
+        <input id="attrs" type="text" placeholder="e.g., A,B,C,D" value="A,B,C,D,E" />
+
+        <label style="margin-top:10px">Functional Dependencies (one per line, use -> ; e.g., A,B -> C)</label>
+        <textarea id="fds" placeholder="A -> B\nB -> C"></textarea>
+
+        <div style="margin-top:10px" class="row">
+          <button id="compute">Compute Closures & Keys</button>
+          <button id="normalize" class="alt">Run Normalization Steps</button>
+          <button id="clear" class="alt">Reset</button>
+        </div>
+
+        <div id="results" class="output" aria-live="polite">
+          <div class="small">Results will appear here after you click <strong>Compute Closures & Keys</strong>.</div>
+        </div>
+
+        <h3 style="margin-top:14px">Detailed Steps</h3>
+        <div id="steps" class="step small">Normalization steps will appear after you click <strong>Run Normalization Steps</strong>.</div>
+      </main>
+
+      <aside class="card">
+        <h3 style="margin-top:0">Quick Help</h3>
+        <div class="small">
+          <ul>
+            <li>Enter attributes like: <code>A,B,C</code></li>
+            <li>Functional dependencies format: <code>A,B -> C</code></li>
+            <li>Candidate keys are computed by finding minimal attribute sets whose closure equals all attributes.</li>
+            <li>For large attribute sets (n &gt; 12), key search may be slow; keep input small for classroom use.</li>
+          </ul>
+        </div>
+
+        <h4 style="margin-top:10px">Checks explained</h4>
+        <div class="small">
+          <div class="chip">Lossless join — uses intersection rule</div>
+          <div class="chip">Dependency preservation — checks if original FDs are implied by decomposed FDs</div>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      Tip: try example: Attributes <code>A,B,C,D</code> and FDs:<br>
+      <code>A -> B</code><br>
+      <code>B -> C</code><br>
+      <code>A -> D</code>
+    </footer>
+  </div>
+
+  <script>
+    // Utility functions
+    function parseAttrs(s){return s.split(',').map(x=>x.trim()).filter(x=>x)}
+    function parseFDs(text){
+      return text.split('\n').map(line=>line.trim()).filter(l=>l).map(l=>{
+        const parts = l.split('->');
+        if(parts.length!==2) throw new Error('FD must contain -> : ' + l);
+        const lhs = parts[0].split(',').map(x=>x.trim()).filter(x=>x);
+        const rhs = parts[1].split(',').map(x=>x.trim()).filter(x=>x);
+        return {lhs: [...new Set(lhs)], rhs: [...new Set(rhs)], text: l};
+      });
+    }
+
+    function closure(ofAttrs, fds){
+      const closure = new Set(ofAttrs);
+      let changed = true;
+      while(changed){
+        changed = false;
+        for(const fd of fds){
+          if(fd.lhs.every(a=>closure.has(a))){
+            for(const b of fd.rhs) if(!closure.has(b)){closure.add(b);changed=true}
+          }
+        }
+      }
+      return Array.from(closure);
+    }
+
+    // generate subsets up to full set, ordered by size
+    function subsets(arr){
+      const res=[];
+      const n=arr.length;
+      for(let mask=1;mask<(1<<n);mask++){
+        const s=[]; for(let i=0;i<n;i++) if(mask&(1<<i)) s.push(arr[i]);
+        res.push(s);
+      }
+      res.sort((a,b)=>a.length-b.length);
+      return res;
+    }
+
+    function arraysEqual(a,b){ if(a.length!==b.length) return false; for(let i=0;i<a.length;i++) if(a[i]!==b[i]) return false; return true }
+
+    function computeCandidateKeys(attrs,fds){
+      const all = attrs.slice().sort();
+      const subs = subsets(all);
+      const keys=[];
+      for(const s of subs){
+        const cl = closure(s,fds).sort();
+        if(arraysEqual(cl, all)){
+          // check minimality
+          let minimal=true;
+          for(const k of keys){ if(k.every(a=>s.includes(a))) { minimal=false; break } }
+          if(minimal){
+            // also ensure no proper subset of s is key
+            let hasProperKey=false;
+            for(const i=0;i<s.length-0;i++){
+              const sub = s.slice(0,i).concat(s.slice(i+1));
+            }
+            keys.push(s);
+          }
+        }
+      }
+      // remove supersets (ensure minimal)
+      const minimalKeys = keys.filter(k=>!keys.some(o=>o.length<k.length && o.every(x=>k.includes(x))));
+      return minimalKeys;
+    }
+
+    // Check if X -> Y implied by FDs (i.e., Y subset of closure(X))
+    function implies(fds, X, Y){
+      const cl = closure(X,fds);
+      return Y.every(y=>cl.includes(y));
+    }
+
+    // Projection of FDs onto relation attributes (simple approach: include fds whose attributes subset of relAttrs)
+    function projectFDs(fds, relAttrs){
+      const relSet = new Set(relAttrs);
+      return fds.filter(fd => fd.lhs.every(a=>relSet.has(a)) && fd.rhs.every(a=>relSet.has(a))).map(fd=>({lhs:fd.lhs.slice(), rhs:fd.rhs.slice(), text:fd.text}));
+    }
+
+    // Lossless check for decomposition of R into R1,R2: if (R1 ∩ R2) -> R1 or -> R2 under fds
+    function isLossless(Rattrs, R1attrs, R2attrs, fds){
+      const inter = R1attrs.filter(a=>R2attrs.includes(a));
+      if(inter.length===0) return false;
+      // check if inter -> R1 OR inter -> R2
+      const interClosure = closure(inter,fds);
+      const r1ok = R1attrs.every(a=>interClosure.includes(a));
+      const r2ok = R2attrs.every(a=>interClosure.includes(a));
+      return {inter, r1ok, r2ok, ok: r1ok||r2ok};
+    }
+
+    // Decompose to BCNF: simple recursive algorithm
+    function decomposeToBCNF(attrs,fds){
+      const R = attrs.slice();
+      // find FD X->A where X not superkey
+      function findViolatingFD(Rattrs,fds){
+        for(const fd of fds){
+          // only consider fds relevant to Rattrs
+          if(fd.lhs.every(a=>Rattrs.includes(a)) && fd.rhs.every(a=>Rattrs.includes(a))){
+            const cl = closure(fd.lhs,fds).filter(x=>Rattrs.includes(x));
+            if(!arraysEqual(cl.sort(), Rattrs.slice().sort())) return fd;
+          }
+        }
+        return null;
+      }
+      const result = [];
+      function recurse(Rattrs){
+        const viol = findViolatingFD(Rattrs,fds);
+        if(!viol){ result.push(Rattrs); return }
+        const X = viol.lhs;
+        const Y = viol.rhs;
+        const R1 = Array.from(new Set(X.concat(Y)));
+        const R2 = Rattrs.filter(a=>!Y.includes(a) || X.includes(a));
+        recurse(R1); recurse(R2);
+      }
+      recurse(R);
+      // unique
+      const uniq = []; for(const r of result){ const key=r.slice().sort().join(','); if(!uniq.find(x=>x.key===key)) uniq.push({key,attrs:r}); }
+      return uniq.map(x=>x.attrs);
+    }
+
+    document.getElementById('compute').addEventListener('click', ()=>{
+      const attrsRaw = document.getElementById('attrs').value;
+      const fdsRaw = document.getElementById('fds').value.trim();
+      try{
+        const attrs = parseAttrs(attrsRaw);
+        const fds = parseFDs(fdsRaw);
+        const results = document.getElementById('results'); results.innerHTML='';
+        // closures for each attribute & some combos
+        const closuresDiv = document.createElement('div'); closuresDiv.innerHTML='<strong>Attribute Closures</strong>';
+        for(const a of attrs){ const cl = closure([a],fds); const p = document.createElement('div'); p.className='small'; p.textContent = a + '⁺ = { ' + cl.join(', ') + ' }'; closuresDiv.appendChild(p); }
+        results.appendChild(closuresDiv);
+
+        // candidate keys
+        const keys = computeCandidateKeys(attrs,fds);
+        const keysDiv = document.createElement('div'); keysDiv.style.marginTop='10px'; keysDiv.innerHTML='<strong>Candidate Keys</strong>';
+        if(keys.length===0) keysDiv.innerHTML += '<div class="warn">No candidate key found (check FDs or increase search limit).</div>';
+        else{ for(const k of keys){ const p=document.createElement('div'); p.className='small'; p.textContent = '{ ' + k.join(', ') + ' }'; keysDiv.appendChild(p); } }
+        results.appendChild(keysDiv);
+
+        // list of prime attributes
+        const prime = new Set(); keys.forEach(k=>k.forEach(a=>prime.add(a)));
+        const primeDiv = document.createElement('div'); primeDiv.style.marginTop='10px'; primeDiv.innerHTML = '<strong>Prime Attributes</strong><div class="small">' + (Array.from(prime).length?Array.from(prime).join(', '):'—') + '</div>';
+        results.appendChild(primeDiv);
+
+      }catch(e){ alert('Error: '+e.message) }
+    });
+
+    document.getElementById('normalize').addEventListener('click', ()=>{
+      const attrsRaw = document.getElementById('attrs').value;
+      const fdsRaw = document.getElementById('fds').value.trim();
+      const steps = document.getElementById('steps'); steps.innerHTML='';
+      try{
+        const attrs = parseAttrs(attrsRaw);
+        const fds = parseFDs(fdsRaw);
+        const all = attrs.slice().sort();
+
+        // 1NF: assume atomic attributes; just report
+        const s1 = document.createElement('div'); s1.innerHTML = '<strong>1NF</strong><div class="small">Assumed atomic attributes. Relation R(' + all.join(', ') + ')</div>';
+        steps.appendChild(s1);
+
+        // compute candidate keys
+        const keys = computeCandidateKeys(attrs,fds);
+        const prime = new Set(); keys.forEach(k=>k.forEach(a=>prime.add(a)));
+
+        // 2NF: remove partial dependencies (attributes dependent on part of a candidate key)
+        const partials = [];
+        for(const fd of fds){
+          for(const key of keys){
+            if(fd.lhs.every(a=>key.includes(a)) && fd.lhs.length<key.length){
+              // partial dep
+              partials.push({fd,key});
+            }
+          }
+        }
+        const s2 = document.createElement('div'); s2.innerHTML = '<strong>2NF</strong>';
+        if(partials.length===0) s2.innerHTML += '<div class="small good">No partial dependencies found — relation is in 2NF.</div>';
+        else{
+          s2.innerHTML += '<div class="small warn">Partial dependencies detected (example):</div>';
+          partials.slice(0,5).forEach(p=>{
+            const div = document.createElement('div'); div.className='small'; div.textContent = p.fd.lhs.join(',') + ' -> ' + p.fd.rhs.join(',') + ' (partial on key {' + p.key.join(',') + '})'; s2.appendChild(div);
+          });
+          // perform simple decomposition: for each partial dep X->A create R1(X∪A) and R2 = R - (A)
+          const decomps = [];
+          for(const p of partials){
+            const X = p.fd.lhs; const A = p.fd.rhs; const R1 = Array.from(new Set(X.concat(A)));
+            const R2 = attrs.filter(a=>!A.includes(a));
+            decomps.push({R1,R2,reason:p.fd});
+          }
+          const decDiv = document.createElement('div'); decDiv.className='small'; decDiv.innerHTML = '<strong>Suggested decomposition for 2NF</strong>';
+          decomps.slice(0,5).forEach(d=>{ const p=document.createElement('div'); p.textContent = 'R1(' + d.R1.join(',') + '), R2(' + d.R2.join(',') + ')'; decDiv.appendChild(p); });
+          s2.appendChild(decDiv);
+        }
+        steps.appendChild(s2);
+
+        // 3NF: remove transitive dependencies X->Y->Z where non-key attributes depend on other non-key attributes
+        const transitive = [];
+        // find patterns where A->B and B->C and A not key and B not prime and C non-prime
+        for(const fd1 of fds){
+          for(const fd2 of fds){
+            if(fd1.rhs.some(r=>fd2.lhs.includes(r))){
+              const A = fd1.lhs; const B = fd1.rhs; const C = fd2.rhs;
+              // check if B and C have non-prime
+              const anyB = B.some(b=>!prime.has(b));
+              const anyC = C.some(c=>!prime.has(c));
+              if(anyB && anyC){
+                transitive.push({fd1,fd2});
+              }
+            }
+          }
+        }
+        const s3 = document.createElement('div'); s3.innerHTML = '<strong>3NF</strong>';
+        if(transitive.length===0) s3.innerHTML += '<div class="small good">No transitive dependencies — relation is in 3NF (if also 2NF).</div>';
+        else{
+          s3.innerHTML += '<div class="small warn">Transitive dependencies detected (examples):</div>';
+          transitive.slice(0,5).forEach(t=>{ const p=document.createElement('div'); p.className='small'; p.textContent = t.fd1.lhs.join(',') + ' -> ' + t.fd1.rhs.join(',') + '  and  ' + t.fd2.lhs.join(',') + ' -> ' + t.fd2.rhs.join(','); s3.appendChild(p); });
+          // simple decomposition: create relations for the dependencies
+          const decs = [];
+          transitive.slice(0,5).forEach(t=>{
+            decs.push({R1:Array.from(new Set(t.fd1.lhs.concat(t.fd1.rhs))), R2: attrs.filter(a=>!t.fd1.rhs.includes(a))});
+          });
+          const decDiv = document.createElement('div'); decDiv.className='small'; decDiv.innerHTML = '<strong>Suggested decomposition for 3NF</strong>';
+          decs.forEach(d=>{ const p=document.createElement('div'); p.textContent = 'R1(' + d.R1.join(',') + '), R2(' + d.R2.join(',') + ')'; decDiv.appendChild(p); });
+          s3.appendChild(decDiv);
+        }
+        steps.appendChild(s3);
+
+        // BCNF decomposition
+        const bcnf = decomposeToBCNF(attrs,fds);
+        const sb = document.createElement('div'); sb.innerHTML = '<strong>BCNF</strong><div class="small">Resulting relations after BCNF decomposition:</div>';
+        bcnf.forEach(r=>{ const p=document.createElement('div'); p.className='small'; p.textContent = 'R(' + r.join(',') + ')'; sb.appendChild(p); });
+        steps.appendChild(sb);
+
+        // For each decomposition, check lossless and dependency preservation (pairwise for simplicity)
+        const checkDiv = document.createElement('div'); checkDiv.innerHTML = '<strong>Lossless join and Dependency Preservation checks</strong>';
+        // For simplicity, check pairwise R1 vs R2 for decompositions we suggested earlier (if any)
+        const decompPairs = [];
+        // Use decomps from 2NF/3NF if present, else use BCNF pairs
+        if(typeof decomps !== 'undefined' && decomps.length>0){
+          decompPairs.push(...decomps.map(d=>[d.R1,d.R2]));
+        } else if(bcnf.length>1){
+          for(let i=0;i<bcnf.length-1;i++) decompPairs.push([bcnf[i], bcnf[i+1]]);
+        }
+        if(decompPairs.length===0) checkDiv.innerHTML += '<div class="small">No decompositions to check.</div>';
+        else{
+          decompPairs.slice(0,6).forEach(pair=>{
+            const r1 = pair[0], r2 = pair[1];
+            const res = isLossless(attrs, r1, r2, fds);
+            const p=document.createElement('div'); p.className='small'; p.innerHTML = 'R1(' + r1.join(',') + ') &amp; R2(' + r2.join(',') + ') — Intersection: {' + res.inter.join(',') + '} — Lossless: ' + (res.ok?'<span class="good">YES</span>':'<span class="danger">NO</span>');
+            checkDiv.appendChild(p);
+            // dependency preservation: project fds and test original fds implied
+            const proj1 = projectFDs(fds, r1);
+            const proj2 = projectFDs(fds, r2);
+            const unionProj = proj1.concat(proj2);
+            // check each original fd
+            let preservedAll = true;
+            for(const fd of fds){ if(!implies(unionProj, fd.lhs, fd.rhs)){ preservedAll=false; break } }
+            const p2 = document.createElement('div'); p2.className='small'; p2.innerHTML = 'Dependency preservation: ' + (preservedAll?'<span class="good">YES</span>':'<span class="warn">NO (some FDs lost) </span>'); checkDiv.appendChild(p2);
+          });
+        }
+        steps.appendChild(checkDiv);
+
+      }catch(e){ alert('Error: '+e.message); }
+    });
+
+    document.getElementById('clear').addEventListener('click', ()=>{
+      document.getElementById('attrs').value=''; document.getElementById('fds').value=''; document.getElementById('results').innerHTML=''; document.getElementById('steps').innerHTML='';
+    });
+
+    // set example
+    document.getElementById('attrs').value='A,B,C,D';
+    document.getElementById('fds').value='A -> B\nB -> C\nA -> D';
+  </script>
+</body>
+</html>
